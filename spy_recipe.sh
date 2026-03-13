@@ -1,4 +1,4 @@
-  #!/bin/bash
+#!/bin/bash
 
 python -u run.py \
   --task_name long_term_forecast \
