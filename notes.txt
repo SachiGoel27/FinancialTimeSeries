@@ -6,14 +6,6 @@ two finanical scales of time series:
     - spy closing.
     - goal predict the next 30 days given the past 30 days
 
-workflow:
-
-Check Properties Yourself: You use the statistical scripts (like the one below) to find out if your data is "High Trend," "Stationary," or "Highly Correlated".
-
-Consult the Recipe: You look at the paper's Table 2 or Table 4. If you found your NASDAQ data has High Trend, the paper tells you: "You should use Patch Embedding".
-Run the Comparison: You train two versions of the model:Version A: A "Standard" model (e.g., a vanilla Transformer).Version B: The "Recipe" model (e.g., Transformer + Patch Embedding).
-Compare Results: You check if Version B actually beats Version A. If it does, you have proven that the TIMERECIPE findings work for financial markets
-
 
 statistical proporties of the data, as described by the paper:
 output:
