@@ -98,6 +98,17 @@ if __name__ == '__main__':
     parser.add_argument('--ff_type', type=str, default='mlp', help='model feed-forward type of mlp, rnn, and transformer')
 
     parser.add_argument('--exp_name', type=str, default='test', help='setup name for saving')
+    
+    # Financial evaluation config
+    parser.add_argument('--eval_domain', type=str, default='return', 
+                        choices=['return', 'price', 'volatility'],
+                        help='evaluation domain: return (for return forecasting), price (for price forecasting), volatility (for volatility forecasting)')
+    parser.add_argument('--eval_benchmark', type=str, default='auto',
+                        choices=['auto', 'zero', 'mean', 'last'],
+                        help='benchmark for OOS R²: auto (domain-based), zero (all zeros), mean (train mean), last (last observed value)')
+    parser.add_argument('--annualization', type=int, default=252,
+                        help='annualization factor for Sharpe ratio (252 for daily, 12 for monthly, etc.)')
+    parser.add_argument('--ci', type=int, default=0, help='confidence interval flag (legacy compatibility)')
 
     args = parser.parse_args()
     # args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False

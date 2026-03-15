@@ -1,7 +1,7 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
-from utils.metrics import metric
+from utils.metrics import metric, financial_metrics
 import torch
 import torch.nn as nn
 from torch import optim
@@ -9,6 +9,7 @@ import os
 import time
 import warnings
 import numpy as np
+import json
 import pdb
 
 warnings.filterwarnings('ignore')
@@ -184,12 +185,18 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
     def test(self, setting, test=0):
         test_data, test_loader = self._get_data(flag='test')
+        
+        # Load training data for MASE calculation and benchmark computation
+        train_data, train_loader = self._get_data(flag='train')
+        
         if test:
             print('loading model')
             self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
 
         preds = []
         trues = []
+        last_obs_all = []  # Store last observed values before prediction horizon
+        
         folder_path = '../unitsf_res/' + self.args.exp_name + '/test_results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
@@ -218,6 +225,15 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, :]
                 batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
+                
+                # Get last observed value (last value of input sequence) for financial metrics
+                # This is used for price-direction metrics
+                last_obs = batch_x[:, -1:, :].detach().cpu().numpy()
+                if test_data.scale and self.args.inverse:
+                    last_obs_shape = last_obs.shape
+                    last_obs = test_data.inverse_transform(last_obs.reshape(last_obs_shape[0] * last_obs_shape[1], -1)).reshape(last_obs_shape)
+                last_obs = last_obs[:, :, f_dim:]
+                
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
                 if test_data.scale and self.args.inverse:
@@ -233,6 +249,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 preds.append(pred)
                 trues.append(true)
+                last_obs_all.append(last_obs)
                 # if i % 20 == 0:
                 #     input = batch_x.detach().cpu().numpy()
                 #     if test_data.scale and self.args.inverse:
@@ -244,9 +261,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
+        last_obs_all = np.concatenate(last_obs_all, axis=0)
+        
         print('test shape:', preds.shape, trues.shape)
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        last_obs_all = last_obs_all.reshape(-1, last_obs_all.shape[-2], last_obs_all.shape[-1])
         print('test shape:', preds.shape, trues.shape)
 
         # result save
@@ -254,22 +274,117 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
+        # Compute standard metrics (backward compatible)
         mae, mse, rmse, mape, mspe = metric(preds, trues)
         print('mse:{}, mae:{}'.format(mse, mae))
+
+        # =====================================================================
+        # Financial Metrics Computation
+        # =====================================================================
+        
+        # Get evaluation parameters from args
+        eval_domain = getattr(self.args, 'eval_domain', 'return')
+        eval_benchmark = getattr(self.args, 'eval_benchmark', 'auto')
+        annualization = getattr(self.args, 'annualization', 252)
+        
+        # Prepare in-sample data for MASE calculation
+        # Collect all training targets
+        insample_targets = []
+        for batch_x, batch_y, _, _ in train_loader:
+            f_dim = -1 if self.args.features == 'MS' else 0
+            batch_y_target = batch_y[:, -self.args.pred_len:, f_dim:].numpy()
+            insample_targets.append(batch_y_target)
+        insample_targets = np.concatenate(insample_targets, axis=0).flatten()
+        
+        # Compute benchmark predictions based on eval_benchmark setting
+        # Auto mode: select benchmark based on eval_domain
+        if eval_benchmark == 'auto':
+            if eval_domain == 'return':
+                eval_benchmark = 'zero'
+            elif eval_domain == 'price':
+                eval_benchmark = 'last'
+            else:  # volatility
+                eval_benchmark = 'mean'
+        
+        # Create benchmark prediction array
+        if eval_benchmark == 'zero':
+            benchmark_pred = np.zeros_like(preds)
+        elif eval_benchmark == 'mean':
+            train_mean = np.mean(insample_targets)
+            benchmark_pred = np.full_like(preds, train_mean)
+        elif eval_benchmark == 'last':
+            # Broadcast last_obs to match prediction shape
+            benchmark_pred = np.broadcast_to(last_obs_all, preds.shape).copy()
+        else:
+            benchmark_pred = np.zeros_like(preds)
+        
+        # Prepare last_obs for price metrics (broadcast to match pred shape)
+        last_obs_broadcast = np.broadcast_to(last_obs_all, preds.shape).copy() if eval_domain == 'price' else None
+        
+        # Compute financial metrics
+        fin_metrics = financial_metrics(
+            pred=preds,
+            true=trues,
+            target_type=eval_domain,
+            insample=insample_targets,
+            benchmark_pred=benchmark_pred,
+            last_obs=last_obs_broadcast,
+            annualization=annualization
+        )
+        
+        # Add benchmark info to metrics
+        fin_metrics['eval_benchmark_type'] = eval_benchmark
+        
+        print('\n=== Financial Metrics ===')
+        for k, v in fin_metrics.items():
+            if isinstance(v, float):
+                print(f'{k}: {v:.6f}')
+            else:
+                print(f'{k}: {v}')
+        
+        # =====================================================================
+        # Save Results
+        # =====================================================================
 
         log_path = "./res/" + self.args.exp_name
         if not os.path.exists(log_path):
             os.makedirs(log_path)
 
+        # Write standard metrics to log file
         f = open(log_path+"/result_long_term_forecast_{}.txt".format(self.args.seed), 'a')
         f.write(setting + "  \n")
         f.write('mse:{}, mae:{}'.format(mse, mae))
         f.write('\n')
+        
+        # Write financial metrics to log file
+        f.write('=== Financial Metrics ===\n')
+        for k, v in fin_metrics.items():
+            if isinstance(v, float):
+                f.write(f'{k}: {v:.6f}\n')
+            else:
+                f.write(f'{k}: {v}\n')
         f.write('\n')
         f.close()
 
+        # Save numpy arrays (backward compatible)
         np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
         np.save(folder_path + 'pred.npy', preds)
         np.save(folder_path + 'true.npy', trues)
+        np.save(folder_path + 'last_obs.npy', last_obs_all)
+        
+        # Save financial metrics as JSON
+        with open(folder_path + 'financial_metrics.json', 'w') as f:
+            # Convert any numpy types to Python types for JSON serialization
+            json_metrics = {}
+            for k, v in fin_metrics.items():
+                if isinstance(v, (np.floating, np.integer)):
+                    json_metrics[k] = float(v)
+                elif isinstance(v, np.ndarray):
+                    json_metrics[k] = v.tolist()
+                else:
+                    json_metrics[k] = v
+            json.dump(json_metrics, f, indent=2)
+        
+        print(f'\nFinancial metrics saved to: {folder_path}financial_metrics.json')
 
         return
