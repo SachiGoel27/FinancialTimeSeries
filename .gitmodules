@@ -1,0 +1,3 @@
+[submodule "TimeRecipe"]
+	path = TimeRecipe
+	url = https://github.com/AdityaLab/TimeRecipe.git
