@@ -1,7 +1,7 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
-from utils.metrics import metric, financial_metrics
+from utils.metrics import metric, financial_metrics, macro_metrics
 import torch
 import torch.nn as nn
 from torch import optim
@@ -303,6 +303,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 eval_benchmark = 'zero'
             elif eval_domain == 'price':
                 eval_benchmark = 'last'
+            elif eval_domain == 'macro':
+                eval_benchmark = 'ar1'
             else:  # volatility
                 eval_benchmark = 'mean'
         
@@ -315,32 +317,82 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         elif eval_benchmark == 'last':
             # Broadcast last_obs to match prediction shape
             benchmark_pred = np.broadcast_to(last_obs_all, preds.shape).copy()
+        elif eval_benchmark == 'ar1':
+            # AR(1) benchmark will be computed in macro_metrics
+            benchmark_pred = None
         else:
             benchmark_pred = np.zeros_like(preds)
         
         # Prepare last_obs for price metrics (broadcast to match pred shape)
         last_obs_broadcast = np.broadcast_to(last_obs_all, preds.shape).copy() if eval_domain == 'price' else None
         
-        # Compute financial metrics
-        fin_metrics = financial_metrics(
-            pred=preds,
-            true=trues,
-            target_type=eval_domain,
-            insample=insample_targets,
-            benchmark_pred=benchmark_pred,
-            last_obs=last_obs_broadcast,
-            annualization=annualization
-        )
+        # Compute financial metrics (for non-macro domains)
+        if eval_domain != 'macro':
+            fin_metrics = financial_metrics(
+                pred=preds,
+                true=trues,
+                target_type=eval_domain,
+                insample=insample_targets,
+                benchmark_pred=benchmark_pred,
+                last_obs=last_obs_broadcast,
+                annualization=annualization
+            )
+            
+            # Add benchmark info to metrics
+            fin_metrics['eval_benchmark_type'] = eval_benchmark
+            
+            print('\n=== Financial Metrics ===')
+            for k, v in fin_metrics.items():
+                if isinstance(v, float):
+                    print(f'{k}: {v:.6f}')
+                else:
+                    print(f'{k}: {v}')
+        else:
+            fin_metrics = {}
         
-        # Add benchmark info to metrics
-        fin_metrics['eval_benchmark_type'] = eval_benchmark
+        # =====================================================================
+        # Macro Metrics Computation (for macro domain)
+        # =====================================================================
         
-        print('\n=== Financial Metrics ===')
-        for k, v in fin_metrics.items():
-            if isinstance(v, float):
-                print(f'{k}: {v:.6f}')
-            else:
-                print(f'{k}: {v}')
+        macro_metrics_dict = None
+        if eval_domain == 'macro':
+            # Prepare last_obs for macro metrics
+            # Flatten last_obs_all for batch processing
+            last_obs_flat = last_obs_all.reshape(last_obs_all.shape[0], -1).mean(axis=-1)
+            
+            # Compute macro metrics with AR(1) benchmark
+            macro_metrics_dict = macro_metrics(
+                pred=preds,
+                true=trues,
+                insample=insample_targets,
+                last_obs_all=last_obs_flat
+            )
+            
+            print('\n=== Macro Forecasting Metrics ===')
+            print(f"AR(1) Coefficients: alpha={macro_metrics_dict['ar1_alpha']:.6f}, beta={macro_metrics_dict['ar1_beta']:.6f}")
+            print(f"\n--- Overall Metrics ---")
+            print(f"MSE: {macro_metrics_dict['mse']:.6f}")
+            print(f"RMSE: {macro_metrics_dict['rmse']:.6f}")
+            print(f"MAE: {macro_metrics_dict['mae']:.6f}")
+            print(f"\n--- AR(1) Comparison ---")
+            print(f"MSE Ratio (Model/AR1): {macro_metrics_dict['mse_ratio_ar1']:.6f}")
+            print(f"RMSE Ratio (Model/AR1): {macro_metrics_dict['rmse_ratio_ar1']:.6f}")
+            print(f"OOS R² vs AR(1): {macro_metrics_dict['oos_r2_ar1']:.6f}")
+            print(f"Theil's U: {macro_metrics_dict['theil_u']:.6f}")
+            print(f"\n--- AR(1) Baseline ---")
+            print(f"MSE (AR1): {macro_metrics_dict['mse_ar1']:.6f}")
+            print(f"RMSE (AR1): {macro_metrics_dict['rmse_ar1']:.6f}")
+            
+            print(f"\n--- RMSFE by Horizon ---")
+            for h, rmsfe in macro_metrics_dict['rmsfe_by_horizon'].items():
+                print(f"  {h}: {rmsfe:.6f}")
+            
+            print(f"\n--- Metrics by Horizon ---")
+            for h, h_metrics in macro_metrics_dict['metrics_by_horizon'].items():
+                print(f"  {h}:")
+                print(f"    MSE: {h_metrics['mse']:.6f}, RMSE: {h_metrics['rmse']:.6f}, MAE: {h_metrics['mae']:.6f}")
+                if 'mse_ratio_ar1' in h_metrics:
+                    print(f"    MSE Ratio: {h_metrics['mse_ratio_ar1']:.6f}, OOS R² vs AR1: {h_metrics['oos_r2_ar1']:.6f}")
         
         # =====================================================================
         # Save Results
@@ -356,14 +408,32 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         f.write('mse:{}, mae:{}'.format(mse, mae))
         f.write('\n')
         
-        # Write financial metrics to log file
-        f.write('=== Financial Metrics ===\n')
-        for k, v in fin_metrics.items():
-            if isinstance(v, float):
-                f.write(f'{k}: {v:.6f}\n')
-            else:
-                f.write(f'{k}: {v}\n')
-        f.write('\n')
+        # Write financial metrics to log file (if computed)
+        if fin_metrics:
+            f.write('=== Financial Metrics ===\n')
+            for k, v in fin_metrics.items():
+                if isinstance(v, float):
+                    f.write(f'{k}: {v:.6f}\n')
+                else:
+                    f.write(f'{k}: {v}\n')
+            f.write('\n')
+        
+        # Write macro metrics to log file (if computed)
+        if macro_metrics_dict is not None:
+            f.write('=== Macro Forecasting Metrics ===\n')
+            f.write(f"AR(1) Coefficients: alpha={macro_metrics_dict['ar1_alpha']:.6f}, beta={macro_metrics_dict['ar1_beta']:.6f}\n")
+            f.write(f"MSE: {macro_metrics_dict['mse']:.6f}\n")
+            f.write(f"RMSE: {macro_metrics_dict['rmse']:.6f}\n")
+            f.write(f"MAE: {macro_metrics_dict['mae']:.6f}\n")
+            f.write(f"MSE Ratio (Model/AR1): {macro_metrics_dict['mse_ratio_ar1']:.6f}\n")
+            f.write(f"RMSE Ratio (Model/AR1): {macro_metrics_dict['rmse_ratio_ar1']:.6f}\n")
+            f.write(f"OOS R² vs AR(1): {macro_metrics_dict['oos_r2_ar1']:.6f}\n")
+            f.write(f"Theil's U: {macro_metrics_dict['theil_u']:.6f}\n")
+            f.write('\nRMSFE by Horizon:\n')
+            for h, rmsfe in macro_metrics_dict['rmsfe_by_horizon'].items():
+                f.write(f"  {h}: {rmsfe:.6f}\n")
+            f.write('\n')
+        
         f.close()
 
         # Save numpy arrays (backward compatible)
@@ -372,19 +442,39 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         np.save(folder_path + 'true.npy', trues)
         np.save(folder_path + 'last_obs.npy', last_obs_all)
         
-        # Save financial metrics as JSON
-        with open(folder_path + 'financial_metrics.json', 'w') as f:
-            # Convert any numpy types to Python types for JSON serialization
-            json_metrics = {}
-            for k, v in fin_metrics.items():
-                if isinstance(v, (np.floating, np.integer)):
-                    json_metrics[k] = float(v)
-                elif isinstance(v, np.ndarray):
-                    json_metrics[k] = v.tolist()
-                else:
-                    json_metrics[k] = v
-            json.dump(json_metrics, f, indent=2)
+        # Save financial metrics as JSON (if computed)
+        if fin_metrics:
+            with open(folder_path + 'financial_metrics.json', 'w') as f:
+                # Convert any numpy types to Python types for JSON serialization
+                json_metrics = {}
+                for k, v in fin_metrics.items():
+                    if isinstance(v, (np.floating, np.integer)):
+                        json_metrics[k] = float(v)
+                    elif isinstance(v, np.ndarray):
+                        json_metrics[k] = v.tolist()
+                    else:
+                        json_metrics[k] = v
+                json.dump(json_metrics, f, indent=2)
+            print(f'\nFinancial metrics saved to: {folder_path}financial_metrics.json')
         
-        print(f'\nFinancial metrics saved to: {folder_path}financial_metrics.json')
+        # Save macro metrics as JSON (if computed)
+        if macro_metrics_dict is not None:
+            with open(folder_path + 'macro_metrics.json', 'w') as f:
+                # Convert any numpy types to Python types for JSON serialization
+                def convert_to_json_serializable(obj):
+                    if isinstance(obj, (np.floating, np.integer)):
+                        return float(obj)
+                    elif isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    elif isinstance(obj, dict):
+                        return {k: convert_to_json_serializable(v) for k, v in obj.items()}
+                    elif isinstance(obj, (list, tuple)):
+                        return [convert_to_json_serializable(item) for item in obj]
+                    else:
+                        return obj
+                
+                json_macro = convert_to_json_serializable(macro_metrics_dict)
+                json.dump(json_macro, f, indent=2)
+            print(f'Macro metrics saved to: {folder_path}macro_metrics.json')
 
         return

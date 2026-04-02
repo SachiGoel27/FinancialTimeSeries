@@ -99,15 +99,15 @@ if __name__ == '__main__':
 
     parser.add_argument('--exp_name', type=str, default='test', help='setup name for saving')
     
-    # Financial evaluation config
+    # Financial/Macro evaluation config
     parser.add_argument('--eval_domain', type=str, default='return', 
-                        choices=['return', 'price', 'volatility'],
-                        help='evaluation domain: return (for return forecasting), price (for price forecasting), volatility (for volatility forecasting)')
+                        choices=['return', 'price', 'volatility', 'macro'],
+                        help='evaluation domain: return (for return forecasting), price (for price forecasting), volatility (for volatility forecasting), macro (for macroeconomic forecasting with AR(1) benchmark)')
     parser.add_argument('--eval_benchmark', type=str, default='auto',
-                        choices=['auto', 'zero', 'mean', 'last'],
-                        help='benchmark for OOS R²: auto (domain-based), zero (all zeros), mean (train mean), last (last observed value)')
+                        choices=['auto', 'zero', 'mean', 'last', 'ar1'],
+                        help='benchmark for OOS R²: auto (domain-based), zero (all zeros), mean (train mean), last (last observed value), ar1 (AR(1) model)')
     parser.add_argument('--annualization', type=int, default=252,
-                        help='annualization factor for Sharpe ratio (252 for daily, 12 for monthly, etc.)')
+                        help='annualization factor for Sharpe ratio (252 for daily, 12 for monthly, 4 for quarterly)')
     parser.add_argument('--ci', type=int, default=0, help='confidence interval flag (legacy compatibility)')
 
     args = parser.parse_args()
