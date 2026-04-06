@@ -1,5 +1,5 @@
 # Test 1: Long Sequence (Capturing slow build-up and long memory)
-python main.py \
+python run.py \
   --is_training 1 \
   --data credit_spreads \
   --features M \
@@ -8,7 +8,7 @@ python main.py \
   --des 'Exp_LongSeq_Credit'
 
 # Baseline: Standard/Short Sequence (Typical equity look-back)
-python main.py \
+python run.py \
   --is_training 1 \
   --data credit_spreads \
   --features M \
