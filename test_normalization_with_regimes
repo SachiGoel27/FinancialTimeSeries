@@ -1,0 +1,19 @@
+# Test 1: With Instance Normalization (Handling regime shifts)
+python main.py \
+  --is_training 1 \
+  --data credit_spreads \
+  --features M \
+  --seq_len 96 \
+  --pred_len 24 \
+  --use_norm True \
+  --des 'Exp_Norm_Credit'
+
+# Baseline: Without Normalization (Susceptible to volatility clustering)
+python main.py \
+  --is_training 1 \
+  --data credit_spreads \
+  --features M \
+  --seq_len 96 \
+  --pred_len 24 \
+  --use_norm False \
+  --des 'Exp_NoNorm_Credit'
