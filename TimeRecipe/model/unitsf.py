@@ -4,7 +4,7 @@ import torch.nn as nn
 from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbedding, FreqEmbedding
 from module.architecture import MLP, RNN, Transformer
 from module.decomp import NoDecomp, SeriesDecomp
-from module.norm import InstNorm
+from module.norm import InstNorm, VolatilityNorm
 
 
 import pdb
@@ -16,6 +16,8 @@ class Model(nn.Module):
 
         self.use_norm = configs.use_norm  
         self.use_decomp = configs.use_decomp  
+        self.use_vol_norm = getattr(configs, 'use_vol_norm', False)
+        
         self.emb_type = configs.emb_type 
         self.ff_type = configs.ff_type  
         self.fusion_type = configs.fusion
@@ -114,6 +116,11 @@ class Model(nn.Module):
         if self.use_norm:
             self.norm = InstNorm()
 
+        if self.use_vol_norm:
+            vol_method = getattr(configs, 'vol_method', 'ewma')
+            vol_window = getattr(configs, 'vol_window', 21)
+            self.vol_norm = VolatilityNorm(method=vol_method, window_size=vol_window)
+
         if self.use_decomp:
             self.decompsition = SeriesDecomp(self.moving_avg)
         else:
@@ -123,6 +130,10 @@ class Model(nn.Module):
 
 
     def forward(self, x_enc):
+        # Volatility Normalization (financial series)
+        if self.use_vol_norm:
+            x_enc = self.vol_norm(x_enc)
+
         # Norm
         if self.use_norm:
             x_enc = self.norm.norm(x_enc)
@@ -162,10 +173,13 @@ class Model(nn.Module):
         # Series Decomposition Sum
         dec_out = dec_out[0] if len(dec_out) == 1 else dec_out[0] + dec_out[1]
 
-        # pdb.set_trace()
         # Denorm
         if self.use_norm:
             dec_out = self.norm.denorm(dec_out[:,-self.pred_len:])
+            
+        # Denorm Volatility
+        if self.use_vol_norm:
+            dec_out = self.vol_norm.denorm(dec_out)
 
         return dec_out
         
