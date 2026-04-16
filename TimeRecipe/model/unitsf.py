@@ -5,6 +5,7 @@ from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbe
 from module.architecture import MLP, RNN, Transformer
 from module.decomp import NoDecomp, SeriesDecomp
 from module.norm import InstNorm
+from module.log_transform import LogTransform
 
 
 import pdb
@@ -19,6 +20,7 @@ class Model(nn.Module):
         self.emb_type = configs.emb_type 
         self.ff_type = configs.ff_type  
         self.fusion_type = configs.fusion
+        self.use_log_transform = configs.use_log_transform
 
         assert isinstance(self.use_norm, bool)  
         assert isinstance(self.use_decomp, bool)  
@@ -114,6 +116,9 @@ class Model(nn.Module):
         if self.use_norm:
             self.norm = InstNorm()
 
+        if self.use_log_transform:
+            self.log = LogTransform()
+
         if self.use_decomp:
             self.decompsition = SeriesDecomp(self.moving_avg)
         else:
@@ -123,6 +128,10 @@ class Model(nn.Module):
 
 
     def forward(self, x_enc):
+        # Log Transform
+        if self.use_log_transform:
+            x_enc = self.log.forward(x_enc)
+
         # Norm
         if self.use_norm:
             x_enc = self.norm.norm(x_enc)
@@ -166,6 +175,10 @@ class Model(nn.Module):
         # Denorm
         if self.use_norm:
             dec_out = self.norm.denorm(dec_out[:,-self.pred_len:])
+
+        # Inverse Log Transform
+        if self.use_log_transform:
+            dec_out = self.log.backward(dec_out)
 
         return dec_out
         

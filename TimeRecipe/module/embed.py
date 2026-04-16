@@ -112,6 +112,3 @@ class InvertEmbedding(nn.Module):
         x = x.permute(0,2,1)
         return self.dropout(x)
     
-
-class Time2Vec(nn.Module):
-    pass
