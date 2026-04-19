@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
 
-from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbedding, FreqEmbedding
-from module.architecture import MLP, RNN, Transformer
+from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbedding, FreqEmbedding, ResidualEmbedding
+from module.architecture import MLP, RNN, Transformer, MAGN
 from module.decomp import NoDecomp, SeriesDecomp
-from module.norm import InstNorm, VolatilityNorm
+from module.norm import InstNorm, VolatilityNorm, ResidualPreprocessor
 
 
 import pdb
@@ -17,6 +17,7 @@ class Model(nn.Module):
         self.use_norm = configs.use_norm  
         self.use_decomp = configs.use_decomp  
         self.use_vol_norm = getattr(configs, 'use_vol_norm', False)
+        self.use_residual_embedding = getattr(configs, 'use_residual_embedding', False)
         
         self.emb_type = configs.emb_type 
         self.ff_type = configs.ff_type  
@@ -25,7 +26,7 @@ class Model(nn.Module):
         assert isinstance(self.use_norm, bool)  
         assert isinstance(self.use_decomp, bool)  
         assert self.emb_type in ['token', 'patch', 'invert', 'freq', 'none']
-        assert self.ff_type in ['mlp', 'rnn', 'trans']    
+        assert self.ff_type in ['mlp', 'rnn', 'trans', 'magn']    
         assert self.fusion_type in ['temporal', 'feature']   
 
         self.seq_len = configs.seq_len
@@ -121,6 +122,17 @@ class Model(nn.Module):
             vol_window = getattr(configs, 'vol_window', 21)
             self.vol_norm = VolatilityNorm(method=vol_method, window_size=vol_window)
 
+        if self.use_residual_embedding:
+            residual_window = getattr(configs, 'residual_window', 60)
+            self.residual_preprocessor = ResidualPreprocessor(window_size=residual_window)
+
+        if self.ff_type == 'magn':
+            modalities = getattr(configs, 'magn_modalities', {'price': self.d_model})
+            use_feature_gating = getattr(configs, 'magn_use_feature_gating', True)
+            use_target_conditioning = getattr(configs, 'magn_use_target_conditioning', True)
+            shared_mlp = getattr(configs, 'magn_shared_mlp', False)
+            self.magn_modalities = modalities
+
         if self.use_decomp:
             self.decompsition = SeriesDecomp(self.moving_avg)
         else:
@@ -153,7 +165,11 @@ class Model(nn.Module):
         if self.fusion_config in ['temporal_mlp', 'feature_rnn', 'feature_trans']:
             x_emb = [x.permute(0,2,1) for x in x_emb] 
 
-        enc_out = [self.ff_model[i](x_emb[i]) for i in range(len(x_emb))]
+        # Forward through FF model (handles MAGN dict input internally)
+        if self.ff_type == 'magn':
+            enc_out = [self.ff_model[i](x_emb[i], target_embedding=x_emb[i]) for i in range(len(x_emb))]
+        else:
+            enc_out = [self.ff_model[i](x_emb[i]) for i in range(len(x_emb))]
 
         if self.fusion_config in ['temporal_mlp', 'feature_rnn', 'feature_trans']:
             enc_out = [x.permute(0,2,1) for x in enc_out] 
@@ -214,6 +230,12 @@ class Model(nn.Module):
             self.ff_model = nn.ModuleList([
                 Transformer(model_in_size=self.model_in_size, d_ff=self.d_ff, e_layers=self.e_layers, emb_type=self.emb_type,\
                             n_heads=self.n_heads, dropout=self.dropout, factor=self.factor, activation=self.activation)
+                for i in range(n)])
+        
+        elif self.ff_type == 'magn':
+            self.ff_model = nn.ModuleList([
+                MAGN(modalities=self.magn_modalities, d_model=self.d_model, d_ff=self.d_ff, 
+                     model_in_size=self.model_in_size, dropout=self.dropout, activation=self.activation)
                 for i in range(n)])
 
         self.proj_l = nn.ModuleList([nn.Linear(self.proj_l_size, (self.seq_len+self.pred_len)//2+1) if self.emb_type=='freq' \
