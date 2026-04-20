@@ -112,8 +112,8 @@ if __name__ == '__main__':
     # =================================================================================
     original_dataset_name = args.data
     custom_file_map = {
-        'vix_futures': 'vix_futures.xlsx',
-        'credit_spreads': 'credit_spreads.xlsx',
+        'vix_futures': 'vix_futures.csv',
+        'credit_spreads': 'credit_spreads.csv',
         'bitcoin': 'bitcoin.csv',
         'spy': 'spy.csv'
     }
