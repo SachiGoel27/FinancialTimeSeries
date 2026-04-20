@@ -216,3 +216,68 @@ class GELUComplex(nn.Module):
         gelu_real = self.gelu_real(x.real)
         gelu_imag = self.gelu_img(x.imag)
         return torch.complex(gelu_real, gelu_imag)
+
+
+class GLU(nn.Module):
+    """
+    Gated Linear Unit (GLU).
+    Acts as a continuous valve to suppress noisy/irrelevant features.
+    """
+    def __init__(self, input_size):
+        super(GLU, self).__init__()
+        self.linear1 = nn.Linear(input_size, input_size)
+        self.linear2 = nn.Linear(input_size, input_size)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # The gating signal (0 to 1)
+        sig = self.sigmoid(self.linear1(x))
+        # The actual transformation
+        x = self.linear2(x)
+        # Element-wise multiplication
+        return sig * x
+
+class GatedResidualNetwork(nn.Module):
+    """
+    Gated Residual Network (GRN) from the Temporal Fusion Transformer paper.
+    Ideal for financial data due to adaptive complexity and noise suppression.
+    """
+    def __init__(self, input_size, hidden_size, output_size, dropout=0.1):
+        super(GatedResidualNetwork, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        
+        # Linear projection if input size doesn't match output size for the residual skip
+        if self.input_size != self.output_size:
+            self.skip_layer = nn.Linear(self.input_size, self.output_size)
+        else:
+            self.skip_layer = nn.Identity()
+
+        self.fc1 = nn.Linear(self.input_size, hidden_size)
+        self.elu = nn.ELU()
+        self.fc2 = nn.Linear(hidden_size, self.output_size)
+        self.dropout = nn.Dropout(dropout)
+        
+        self.gate = GLU(self.output_size)
+        self.layer_norm = nn.LayerNorm(self.output_size)
+
+    def forward(self, x):
+        """
+        Expects input x of shape: [Batch, Time_Steps, Input_Size]
+        """
+        # 1. Save the original input for the residual skip connection
+        residual = self.skip_layer(x)
+
+        # 2. Primary non-linear transformation
+        x = self.fc1(x)
+        x = self.elu(x)
+        x = self.fc2(x)
+        x = self.dropout(x)
+
+        # 3. Apply the Gated Linear Unit to suppress noise
+        x = self.gate(x)
+
+        # 4. Add the residual connection and normalize
+        x = self.layer_norm(x + residual)
+
+        return x
