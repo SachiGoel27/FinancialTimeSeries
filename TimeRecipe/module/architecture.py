@@ -218,6 +218,166 @@ class GELUComplex(nn.Module):
         return torch.complex(gelu_real, gelu_imag)
 
 
+class MAGN(nn.Module):
+    """
+    Modality-Aware Gated Network (MAGN)
+    
+    Processes multiple data modalities (price, macro, news, etc.) independently,
+    applies feature-level gating, and fuses them using a target-conditioned
+    gating mechanism. This enables dynamic weighting of modality importance.
+    
+    Args:
+        modalities: dict mapping modality names to input dimensions
+        d_model: embedding dimension
+        d_ff: hidden dimension for MLPs
+        model_in_size: output dimension (same as input for seq2seq)
+        use_feature_gating: whether to apply feature-level gates
+        use_target_conditioning: whether to condition fusion on target
+        shared_mlp: whether to share MLP weights across modalities
+        dropout: dropout rate
+        activation: activation function ("relu" or "gelu")
+    """
+    
+    def __init__(self, modalities, d_model, d_ff, model_in_size, 
+                 use_feature_gating=True, use_target_conditioning=True,
+                 shared_mlp=False, dropout=0.1, activation="gelu"):
+        super(MAGN, self).__init__()
+        
+        self.modalities = modalities if isinstance(modalities, dict) else {f"modality_{i}": d for i, d in enumerate(modalities)}
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.model_in_size = model_in_size
+        self.use_feature_gating = use_feature_gating
+        self.use_target_conditioning = use_target_conditioning
+        self.shared_mlp = shared_mlp
+        self.dropout = dropout
+        self.activation = F.relu if activation == "relu" else F.gelu
+        self.num_modalities = len(self.modalities)
+        
+        # Feature gating per modality
+        if self.use_feature_gating:
+            self.feature_gates = nn.ModuleDict({
+                name: nn.Sequential(
+                    nn.Linear(d_model, d_model),
+                    nn.Sigmoid()
+                ) for name in self.modalities.keys()
+            })
+        
+        # Modality-specific processing MLPs
+        if self.shared_mlp:
+            self.mlp = nn.Sequential(
+                nn.Linear(d_model, d_ff),
+                nn.GELU() if activation == "gelu" else nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_ff, d_model),
+                nn.Dropout(dropout)
+            )
+        else:
+            self.modality_mlps = nn.ModuleDict({
+                name: nn.Sequential(
+                    nn.Linear(d_model, d_ff),
+                    nn.GELU() if activation == "gelu" else nn.ReLU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(d_ff, d_model),
+                    nn.Dropout(dropout)
+                ) for name in self.modalities.keys()
+            })
+        
+        # Target-conditioned fusion gate
+        fusion_input_dim = d_model * (self.num_modalities + 1)  # All modalities + target
+        self.fusion_gate = nn.Sequential(
+            nn.Linear(fusion_input_dim, d_ff),
+            nn.GELU() if activation == "gelu" else nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, self.num_modalities)
+        )
+        
+        # Output projection
+        self.output_proj = nn.Linear(d_model, model_in_size)
+        self.dropout_layer = nn.Dropout(dropout)
+    
+    def forward(self, x, target_embedding=None):
+        """
+        Forward pass for MAGN. Can handle both dict and tensor inputs.
+        
+        Args:
+            x: dict of {modality_name: tensor} or tensor [B, T, d_model]
+               If tensor, creates modality_embeddings dict automatically
+            target_embedding: tensor [B, T, d_model] for conditioning (optional)
+        
+        Returns:
+            output: tensor [B, T, model_in_size]
+        """
+        
+        # Convert tensor input to modality dict if needed
+        if not isinstance(x, dict):
+            # Use same embedding for all modalities (adapter mode)
+            modality_embeddings = {name: x for name in self.modalities.keys()}
+        else:
+            modality_embeddings = x
+        
+        return self._forward_impl(modality_embeddings, target_embedding)
+    
+    def _forward_impl(self, modality_embeddings, target_embedding=None):
+        """
+        Forward pass for MAGN.
+        
+        Args:
+            modality_embeddings: dict of {modality_name: tensor [B, T, d_model]}
+            target_embedding: tensor [B, T, d_model] for conditioning (optional)
+        
+        Returns:
+            output: tensor [B, T, model_in_size]
+        """
+        
+        B, T, D = next(iter(modality_embeddings.values())).shape
+        device = next(iter(modality_embeddings.values())).device
+        
+        # Step 1: Feature gating per modality
+        gated_embeddings = {}
+        for name, emb in modality_embeddings.items():
+            if self.use_feature_gating:
+                gate = self.feature_gates[name](emb)
+                gated_embeddings[name] = gate * emb
+            else:
+                gated_embeddings[name] = emb
+        
+        # Step 2: Process each modality through its MLP
+        modality_outputs = {}
+        for name, gated_emb in gated_embeddings.items():
+            if self.shared_mlp:
+                modality_outputs[name] = self.mlp(gated_emb)
+            else:
+                modality_outputs[name] = self.modality_mlps[name](gated_emb)
+        
+        # Step 3: Target-conditioned fusion
+        modality_list = [modality_outputs[name] for name in self.modalities.keys()]
+        
+        if self.use_target_conditioning and target_embedding is not None:
+            # Concatenate all modalities with target for fusion gate
+            fusion_input = torch.cat([target_embedding] + modality_list, dim=-1)
+        else:
+            # Use mean of modalities as conditioning if target not provided
+            if target_embedding is None:
+                target_embedding = torch.mean(torch.stack(modality_list, dim=0), dim=0)
+            fusion_input = torch.cat([target_embedding] + modality_list, dim=-1)
+        
+        # Compute fusion weights
+        fusion_logits = self.fusion_gate(fusion_input)  # [B, T, num_modalities]
+        fusion_weights = torch.softmax(fusion_logits, dim=-1)  # [B, T, num_modalities]
+        
+        # Step 4: Weighted fusion of modalities
+        stacked_modalities = torch.stack(modality_list, dim=2)  # [B, T, num_modalities, d_model]
+        fusion_weights_expanded = fusion_weights.unsqueeze(-1)  # [B, T, num_modalities, 1]
+        fused = (stacked_modalities * fusion_weights_expanded).sum(dim=2)  # [B, T, d_model]
+        
+        # Step 5: Output projection
+        output = self.output_proj(self.dropout_layer(fused))
+        
+        return output
+
+
+
 class GLU(nn.Module):
     """
     Gated Linear Unit (GLU).
