@@ -14,7 +14,7 @@ if os.path.exists(submodule_path):
 # =================================================================================
 
 try:
-    from exp.exp_long_term_forecast import Exp_Long_Term_Forecast
+    from exp.exp_long_term_forecasting import Exp_Long_Term_Forecast
     from utils.print_args import print_args
 except ImportError as e:
     print(f"Error: Could not find model dependencies. Did you run 'git submodule update --init'?")
@@ -89,6 +89,7 @@ if __name__ == '__main__':
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type3', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision', default=False)
+    parser.add_argument('--des', type=str, default='test', help='exp description')
 
     # GPU
     parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')

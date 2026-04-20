@@ -2,6 +2,10 @@ import pandas as pd
 import numpy as np
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.seasonal import STL
+import sys
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'TimeRecipe')))
 
 def calculate_timeripe_properties(df, target_col, period=60):
     series = pd.to_numeric(df[target_col], errors='coerce').dropna().values
