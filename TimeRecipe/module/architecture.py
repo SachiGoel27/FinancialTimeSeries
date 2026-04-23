@@ -441,3 +441,42 @@ class GatedResidualNetwork(nn.Module):
         x = self.layer_norm(x + residual)
 
         return x
+    
+class NBeatsBlock(nn.Module):
+    def __init__(self, model_in_size, d_model):
+        super(NBeatsBlock, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(model_in_size, d_model), nn.ReLU(),
+            nn.Linear(d_model, d_model), nn.ReLU(),
+            nn.Linear(d_model, d_model), nn.ReLU(),
+        )
+        self.backcast_head = nn.Linear(d_model, model_in_size)
+
+    def forward(self, x):
+        h = self.fc(x)
+        backcast = self.backcast_head(h)
+        return backcast
+
+
+class NBeats(nn.Module):
+    """
+    N-BEATS as a drop-in ff_type for TimeRecipe.
+    Each block explains part of the input via a backcast and subtracts it.
+    Output is the final unexplained residual, passed to proj_l as normal.
+    """
+    def __init__(self, model_in_size, d_model, num_blocks=3):
+        super(NBeats, self).__init__()
+        self.blocks = nn.ModuleList([
+            NBeatsBlock(model_in_size, d_model)
+            for _ in range(num_blocks)
+        ])
+
+    def forward(self, x):
+        """
+        x: [B, T, model_in_size]
+        Returns: [B, T, model_in_size]
+        """
+        for block in self.blocks:
+            backcast = block(x)
+            x = x - backcast
+        return x
