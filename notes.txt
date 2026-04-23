@@ -1,0 +1,13 @@
+two finanical scales of time series:
+- short-term: predicting the next 5-15 minutes of a stock price using the last 60 minutes of data (L > H)
+    - bitcoin 1 minute data
+    - goal predict next 15 minutes given the past 60 minutes
+- long-term: predicting the next 30 days of a market index using the last 15-30 days of data
+    - spy closing.
+    - goal predict the next 30 days given the past 30 days
+
+
+statistical proporties of the data, as described by the paper:
+output:
+BTC: {'Trend': 'High', 'Seasonality': 'Low', 'Stationarity': 'Low'}
+SPY: {'Trend': 'High', 'Seasonality': 'Low', 'Stationarity': 'Low'}
