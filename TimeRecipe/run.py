@@ -97,6 +97,13 @@ if __name__ == '__main__':
     parser.add_argument('--emb_type', type=str, default='token', help='token, patch, invert, freq, or no embedding')
     parser.add_argument('--ff_type', type=str, default='mlp', help='model feed-forward type of mlp, rnn, and transformer')
 
+    parser.add_argument('--use_frac_diff', type=str2bool, default=False, help='use fractional differencing')
+    parser.add_argument('--use_fourier', type=str2bool, default=False, help='use fourier seasonal demeaning')
+    parser.add_argument('--use_vol_norm', type=str2bool, default=False, help='use volatility normalization')
+    parser.add_argument('--use_residual_embedding', type=str2bool, default=False, help='use residual preprocessor')
+    parser.add_argument('--nbeats_blocks', type=int, default=3, help='number of nbeats blocks')
+    parser.add_argument('--num_regimes', type=int, default=4, help='number of regime switching MLPs')
+
     parser.add_argument('--exp_name', type=str, default='test', help='setup name for saving')
 
     args = parser.parse_args()
