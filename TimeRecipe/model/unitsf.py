@@ -4,7 +4,7 @@ import torch.nn as nn
 from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbedding, FreqEmbedding, ResidualEmbedding
 from module.architecture import MLP, RNN, Transformer, MAGN
 from module.decomp import NoDecomp, SeriesDecomp
-from module.norm import InstNorm, VolatilityNorm, ResidualPreprocessor
+from module.norm import InstNorm, VolatilityNorm, ResidualPreprocessor, FracDiff
 
 
 import pdb
@@ -117,6 +117,13 @@ class Model(nn.Module):
         if self.use_norm:
             self.norm = InstNorm()
 
+        # Added
+        self.use_frac_diff = getattr(configs, 'use_frac_diff', False)
+        if self.use_frac_diff:
+            frac_d = getattr(configs, 'frac_d', 0.4)
+            frac_window = getattr(configs, 'frac_window', 500)
+            self.frac_diff = FracDiff(d=frac_d, window_size=frac_window)
+
         if self.use_vol_norm:
             vol_method = getattr(configs, 'vol_method', 'ewma')
             vol_window = getattr(configs, 'vol_window', 21)
@@ -149,6 +156,9 @@ class Model(nn.Module):
         # Norm
         if self.use_norm:
             x_enc = self.norm.norm(x_enc)
+
+        if self.use_frac_diff:
+            x_enc = self.frac_diff.norm(x_enc)
 
         # Series Decomposition
         x_enc = self.decompsition(x_enc)
@@ -192,6 +202,9 @@ class Model(nn.Module):
         # Denorm
         if self.use_norm:
             dec_out = self.norm.denorm(dec_out[:,-self.pred_len:])
+
+        if self.use_frac_diff:
+            dec_out = self.frac_diff.denorm(dec_out)
             
         # Denorm Volatility
         if self.use_vol_norm:
