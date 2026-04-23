@@ -179,6 +179,11 @@ class Model(nn.Module):
         if self.use_norm:
             x_enc = self.norm.norm(x_enc)
 
+        if self.use_residual_embedding:
+            market_proxy = x_enc.mean(dim=-1, keepdim=True)  # [B, L, 1] mean across assets
+            x_enc, _ = self.residual_preprocessor(x_enc, [market_proxy])
+
+
         if self.use_frac_diff:
             x_enc = self.frac_diff.norm(x_enc)
 
