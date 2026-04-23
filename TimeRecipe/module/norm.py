@@ -306,3 +306,87 @@ class ResidualPreprocessor(nn.Module):
             reconstructed = reconstructed + factor_contribution.repeat(1, T_pred, 1)
         
         return reconstructed
+    
+class FourierSeasonalDemeaning(nn.Module):
+    """
+    Fourier Seasonal Demeaning for financial time series.
+    
+    Fits a sum of sinusoids at known financial frequencies to the input,
+    subtracts the seasonal curve (pre-processing), and adds it back at
+    the prediction horizon (post-processing).
+    
+    Frequencies assume daily-sampled data:
+        5   = weekly
+        21  = monthly  
+        63  = quarterly
+        126 = semi-annual
+        252 = annual
+    """
+    def __init__(self, periods=[5, 21, 63, 126, 252], pred_len=1):
+        super(FourierSeasonalDemeaning, self).__init__()
+        self.periods = periods
+        self.pred_len = pred_len
+
+    def _build_fourier_basis(self, T, device):
+        """
+        Build sine/cosine basis matrix for time steps 0..T-1.
+        Returns: [T, 2*num_periods]
+        """
+        t = torch.arange(T, dtype=torch.float32, device=device).unsqueeze(1)  # [T, 1]
+        freqs = torch.tensor(self.periods, dtype=torch.float32, device=device).unsqueeze(0)  # [1, P]
+        angles = 2 * torch.pi * t / freqs  # [T, P]
+        basis = torch.cat([torch.sin(angles), torch.cos(angles)], dim=1)  # [T, 2P]
+        return basis
+
+    def norm(self, x):
+        """
+        Input x: [B, L, D]
+        Fit sinusoids on lookback window, subtract seasonal curve.
+        """
+        B, L, D = x.shape
+        device = x.device
+
+        # Build basis for lookback window [L, 2P]
+        basis = self._build_fourier_basis(L, device)  # [L, 2P]
+
+        # OLS: coefficients = (BtB)^-1 Bt x
+        # basis: [L, 2P], x: [B, L, D]
+        # Solve per batch and variable
+        BtB = basis.T @ basis  # [2P, 2P]
+        BtB_inv = torch.linalg.inv(BtB + 1e-6 * torch.eye(BtB.shape[0], device=device))  # regularize
+
+        # x reshaped: [L, B*D]
+        x_flat = x.permute(1, 0, 2).reshape(L, B * D)  # [L, B*D]
+        
+        # Coefficients: [2P, B*D]
+        self.coeffs = BtB_inv @ basis.T @ x_flat  # [2P, B*D]
+
+        # Fitted seasonal curve on lookback: [L, B*D]
+        seasonal = basis @ self.coeffs  # [L, B*D]
+        seasonal = seasonal.reshape(L, B, D).permute(1, 0, 2)  # [B, L, D]
+
+        # Store L for post-processing
+        self.L = L
+
+        return x - seasonal
+
+    def denorm(self, x):
+        """
+        Input x: [B, pred_len, D]
+        Evaluate seasonal curve at future time steps and add back.
+        """
+        B, pred_len, D = x.shape
+        device = x.device
+
+        # Build basis for prediction horizon [pred_len, 2P]
+        # Time indices continue from L
+        t = torch.arange(self.L, self.L + pred_len, dtype=torch.float32, device=device).unsqueeze(1)
+        freqs = torch.tensor(self.periods, dtype=torch.float32, device=device).unsqueeze(0)
+        angles = 2 * torch.pi * t / freqs
+        basis_future = torch.cat([torch.sin(angles), torch.cos(angles)], dim=1)  # [pred_len, 2P]
+
+        # Evaluate seasonal curve at future steps: [pred_len, B*D]
+        seasonal_future = basis_future @ self.coeffs  # [pred_len, B*D]
+        seasonal_future = seasonal_future.reshape(pred_len, B, D).permute(1, 0, 2)  # [B, pred_len, D]
+
+        return x + seasonal_future

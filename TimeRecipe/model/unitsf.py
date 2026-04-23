@@ -4,7 +4,7 @@ import torch.nn as nn
 from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbedding, FreqEmbedding, ResidualEmbedding
 from module.architecture import MLP, RNN, Transformer, MAGN, GatedResidualNetwork
 from module.decomp import NoDecomp, SeriesDecomp
-from module.norm import InstNorm, VolatilityNorm, ResidualPreprocessor, FracDiff
+from module.norm import InstNorm, VolatilityNorm, ResidualPreprocessor, FracDiff, FourierSeasonalDemeaning
 
 
 import pdb
@@ -146,6 +146,11 @@ class Model(nn.Module):
             frac_window = getattr(configs, 'frac_window', 500)
             self.frac_diff = FracDiff(d=frac_d, window_size=frac_window)
 
+        self.use_fourier = getattr(configs, 'use_fourier', False)
+        if self.use_fourier:
+            fourier_periods = getattr(configs, 'fourier_periods', [5, 21, 63, 126, 252])
+            self.fourier = FourierSeasonalDemeaning(periods=fourier_periods, pred_len=self.pred_len)
+
         if self.use_vol_norm:
             vol_method = getattr(configs, 'vol_method', 'ewma')
             vol_window = getattr(configs, 'vol_window', 21)
@@ -179,10 +184,12 @@ class Model(nn.Module):
         if self.use_norm:
             x_enc = self.norm.norm(x_enc)
 
+        if self.use_fourier:
+            x_enc = self.fourier.norm(x_enc)
+
         if self.use_residual_embedding:
             market_proxy = x_enc.mean(dim=-1, keepdim=True)  # [B, L, 1] mean across assets
             x_enc, _ = self.residual_preprocessor(x_enc, [market_proxy])
-
 
         if self.use_frac_diff:
             x_enc = self.frac_diff.norm(x_enc)
@@ -232,6 +239,9 @@ class Model(nn.Module):
 
         if self.use_frac_diff:
             dec_out = self.frac_diff.denorm(dec_out)
+
+        if self.use_fourier:
+            dec_out = self.fourier.denorm(dec_out)
             
         # Denorm Volatility
         if self.use_vol_norm:
