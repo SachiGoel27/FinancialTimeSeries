@@ -25,7 +25,7 @@ class Model(nn.Module):
 
         assert isinstance(self.use_norm, bool)  
         assert isinstance(self.use_decomp, bool)  
-        assert self.emb_type in ['token', 'patch', 'invert', 'freq', 'none']
+        assert self.emb_type in ['token', 'patch', 'invert', 'freq', 'none', 'residual']
         assert self.ff_type in ['mlp', 'rnn', 'trans', 'magn']    
         assert self.fusion_type in ['temporal', 'feature']   
 
@@ -96,6 +96,15 @@ class Model(nn.Module):
             # 'freq_feature': {'model_in_size': configs.enc_in, 'proj_l_size': configs.seq_len//2+1, 'proj_d_size': configs.enc_in},
             # 'none_temporal': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.enc_in},
             # 'none_feature': {'model_in_size': configs.enc_in, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.enc_in},
+
+            'temporal_residual_mlp': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'temporal_residual_rnn': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'temporal_residual_trans': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'temporal_residual_magn': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_residual_mlp': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_residual_rnn': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_residual_trans': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_residual_magn': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
         }
 
         self.fusion_emb_config = self.fusion_type + '_' + self.emb_type + '_' + self.ff_type
@@ -190,7 +199,7 @@ class Model(nn.Module):
         dec_out = [self.proj_l[i](enc_out[i].permute(0,2,1)).permute(0,2,1) for i in range(len(enc_out))]
 
         # Temporal/Feature Fusion Input
-        if self.emb_type == 'token':
+        if self.emb_type in ['token', 'residual']:
             dec_out = [self.proj_d[i](dec_out[i]) for i in range(len(dec_out))]
 
         if self.emb_type == 'freq':
@@ -217,6 +226,8 @@ class Model(nn.Module):
         n = 2 if self.use_decomp else 1
         if self.emb_type == 'token':
             self.emb = nn.ModuleList([TokenEmbedding(self.enc_in, self.d_model, dropout=self.dropout) for i in range(n)])
+        elif self.emb_type == 'residual':
+            self.emb = nn.ModuleList([ResidualEmbedding(self.enc_in, self.d_model, dropout=self.dropout) for i in range(n)])
         elif self.emb_type == 'patch':
             self.emb = nn.ModuleList([PatchEmbedding(self.d_model, self.patch_len, stride=self.stride, padding=self.padding, dropout=self.dropout) for i in range(n)])
         elif self.emb_type == 'invert':
