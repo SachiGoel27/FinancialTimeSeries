@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbedding, FreqEmbedding, ResidualEmbedding
-from module.architecture import MLP, RNN, Transformer, MAGN
+from module.architecture import MLP, RNN, Transformer, MAGN, GatedResidualNetwork
 from module.decomp import NoDecomp, SeriesDecomp
 from module.norm import InstNorm, VolatilityNorm, ResidualPreprocessor, FracDiff
 
@@ -26,7 +26,7 @@ class Model(nn.Module):
         assert isinstance(self.use_norm, bool)  
         assert isinstance(self.use_decomp, bool)  
         assert self.emb_type in ['token', 'patch', 'invert', 'freq', 'none', 'residual']
-        assert self.ff_type in ['mlp', 'rnn', 'trans', 'magn']    
+        assert self.ff_type in ['mlp', 'rnn', 'trans', 'magn', 'grn']    
         assert self.fusion_type in ['temporal', 'feature']   
 
         self.seq_len = configs.seq_len
@@ -105,6 +105,19 @@ class Model(nn.Module):
             'feature_residual_rnn': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
             'feature_residual_trans': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
             'feature_residual_magn': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+
+            'temporal_token_grn': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_token_grn': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'temporal_residual_grn': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_residual_grn': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'temporal_none_grn': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.enc_in},
+            'feature_none_grn': {'model_in_size': configs.enc_in, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.enc_in},
+            'temporal_patch_grn': {'model_in_size': configs.d_model, 'proj_l_size': configs.d_model*self.num_patches, 'proj_d_size': configs.enc_in},
+            'feature_patch_grn': {'model_in_size': self.num_patches, 'proj_l_size': configs.d_model*self.num_patches, 'proj_d_size': configs.enc_in},
+            'temporal_invert_grn': {'model_in_size': configs.d_model, 'proj_l_size': configs.d_model, 'proj_d_size': configs.enc_in},
+            'feature_invert_grn': {'model_in_size': configs.enc_in, 'proj_l_size': configs.d_model, 'proj_d_size': configs.enc_in},
+            'temporal_freq_grn': {'model_in_size': configs.seq_len//2+1, 'proj_l_size': configs.seq_len//2+1, 'proj_d_size': configs.enc_in},
+            'feature_freq_grn': {'model_in_size': configs.enc_in, 'proj_l_size': configs.seq_len//2+1, 'proj_d_size': configs.enc_in},
         }
 
         self.fusion_emb_config = self.fusion_type + '_' + self.emb_type + '_' + self.ff_type
@@ -260,6 +273,15 @@ class Model(nn.Module):
             self.ff_model = nn.ModuleList([
                 MAGN(modalities=self.magn_modalities, d_model=self.d_model, d_ff=self.d_ff, 
                      model_in_size=self.model_in_size, dropout=self.dropout, activation=self.activation)
+                for i in range(n)])
+            
+        elif self.ff_type == 'grn':
+            self.ff_model = nn.ModuleList([
+                GatedResidualNetwork(
+                    input_size=self.model_in_size,
+                    hidden_size=self.d_model,
+                    output_size=self.model_in_size,
+                    dropout=self.dropout)
                 for i in range(n)])
 
         self.proj_l = nn.ModuleList([nn.Linear(self.proj_l_size, (self.seq_len+self.pred_len)//2+1) if self.emb_type=='freq' \
