@@ -2,10 +2,11 @@ import torch
 import torch.nn as nn
 
 from module.embed import NoEmbedding, TokenEmbedding, PatchEmbedding, InvertEmbedding, FreqEmbedding, ResidualEmbedding
-from module.architecture import MLP, RNN, Transformer, MAGN, GatedResidualNetwork, NBeats
+from module.architecture import MLP, RNN, Transformer, MAGN, GatedResidualNetwork, NBeats, RegimeSwitchingMLP
 from module.decomp import NoDecomp, SeriesDecomp
 from module.norm import InstNorm, VolatilityNorm, ResidualPreprocessor, FracDiff, FourierSeasonalDemeaning
 
+from module.log_transform import LogTransform
 
 import pdb
 
@@ -26,7 +27,7 @@ class Model(nn.Module):
         assert isinstance(self.use_norm, bool)  
         assert isinstance(self.use_decomp, bool)  
         assert self.emb_type in ['token', 'patch', 'invert', 'freq', 'none', 'residual']
-        assert self.ff_type in ['mlp', 'rnn', 'trans', 'magn', 'grn', 'nbeats']    
+        assert self.ff_type in ['mlp', 'rnn', 'trans', 'magn', 'grn', 'nbeats', 'regime']    
         assert self.fusion_type in ['temporal', 'feature']   
 
         self.seq_len = configs.seq_len
@@ -52,6 +53,12 @@ class Model(nn.Module):
         self.moving_avg = configs.moving_avg
 
         self.nbeats_blocks = getattr(configs, 'nbeats_blocks', 3)
+
+        self.num_regimes = getattr(configs, 'num_regimes', 4)
+
+        self.use_log_transform = getattr(configs, 'use_log_transform', False)
+        if self.use_log_transform:
+            self.log_transform = LogTransform()
 
         # Shape config to connect all modules accordingly
         shape_config_dict = {
@@ -133,6 +140,19 @@ class Model(nn.Module):
             'feature_invert_nbeats': {'model_in_size': configs.enc_in, 'proj_l_size': configs.d_model, 'proj_d_size': configs.enc_in},
             'temporal_freq_nbeats': {'model_in_size': configs.seq_len//2+1, 'proj_l_size': configs.seq_len//2+1, 'proj_d_size': configs.enc_in},
             'feature_freq_nbeats': {'model_in_size': configs.enc_in, 'proj_l_size': configs.seq_len//2+1, 'proj_d_size': configs.enc_in},
+
+            'temporal_token_regime': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_token_regime': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'temporal_residual_regime': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'feature_residual_regime': {'model_in_size': configs.d_model, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.d_model},
+            'temporal_none_regime': {'model_in_size': configs.seq_len, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.enc_in},
+            'feature_none_regime': {'model_in_size': configs.enc_in, 'proj_l_size': configs.seq_len, 'proj_d_size': configs.enc_in},
+            'temporal_patch_regime': {'model_in_size': configs.d_model, 'proj_l_size': configs.d_model*self.num_patches, 'proj_d_size': configs.enc_in},
+            'feature_patch_regime': {'model_in_size': self.num_patches, 'proj_l_size': configs.d_model*self.num_patches, 'proj_d_size': configs.enc_in},
+            'temporal_invert_regime': {'model_in_size': configs.d_model, 'proj_l_size': configs.d_model, 'proj_d_size': configs.enc_in},
+            'feature_invert_regime': {'model_in_size': configs.enc_in, 'proj_l_size': configs.d_model, 'proj_d_size': configs.enc_in},
+            'temporal_freq_regime': {'model_in_size': configs.seq_len//2+1, 'proj_l_size': configs.seq_len//2+1, 'proj_d_size': configs.enc_in},
+            'feature_freq_regime': {'model_in_size': configs.enc_in, 'proj_l_size': configs.seq_len//2+1, 'proj_d_size': configs.enc_in},
         }
 
         self.fusion_emb_config = self.fusion_type + '_' + self.emb_type + '_' + self.ff_type
@@ -191,6 +211,9 @@ class Model(nn.Module):
 
 
     def forward(self, x_enc):
+        if self.use_log_transform:
+            x_enc = self.log_transform(x_enc)
+
         # Volatility Normalization (financial series)
         if self.use_vol_norm:
             x_enc = self.vol_norm(x_enc)
@@ -262,6 +285,9 @@ class Model(nn.Module):
         if self.use_vol_norm:
             dec_out = self.vol_norm.denorm(dec_out)
 
+        if self.use_log_transform:
+            dec_out = self.log_transform.backward(dec_out)
+
         return dec_out
         
 
@@ -318,6 +344,15 @@ class Model(nn.Module):
             nbeats_blocks = getattr(self, 'nbeats_blocks', 3)
             self.ff_model = nn.ModuleList([
                 NBeats(model_in_size=self.model_in_size, d_model=self.d_model, num_blocks=nbeats_blocks)
+                for i in range(n)])
+            
+        elif self.ff_type == 'regime':
+            self.ff_model = nn.ModuleList([
+                RegimeSwitchingMLP(
+                    model_in_size=self.model_in_size,
+                    d_model=self.d_model,
+                    num_regimes=self.num_regimes,
+                    dropout=self.dropout)
                 for i in range(n)])
 
         self.proj_l = nn.ModuleList([nn.Linear(self.proj_l_size, (self.seq_len+self.pred_len)//2+1) if self.emb_type=='freq' \
