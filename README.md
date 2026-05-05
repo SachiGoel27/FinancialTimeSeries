@@ -20,10 +20,15 @@ Embedding - Residual Embedding
 Feed Forward Modeling - Gated Residual Network, N-BEATS, Regime Switching MLP, MAGN
 
 Datasets:
+
 Four financial datasets were added to the repo root to serve as financial benchmarks. Each of which cover a different type of financial time series or were gathered from a different region.
+
     - VIX Futures
+    
     - US Investment Grade OAS
+    
     - European High Yield OAS
+    
     - 30 Year US Mortgage Rates
 
 Installation:
