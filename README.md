@@ -10,6 +10,7 @@ The integrate-all branch combines add-modules with the financial datasets and te
 The other branches were used for testing and collaboration throughout the semester. There is testing code within each but it is not relevant for the final product.
 
 New Components: 
+
 The following new components were added to the TimeRecipe framework.
 
 Preprocessing - Log Transform, Volatility Normalization, Fractional Differencing, Fourier Seasonal Demeaning
@@ -26,10 +27,15 @@ Four financial datasets were added to the repo root to serve as financial benchm
     - 30 Year US Mortgage Rates
 
 Installation:
+
     git clone https://github.com/SachiGoel27/FinancialTimeSeries.git
+    
     cd FinancialTimeSeries
+    
     git checkout add-modules
+    
     cd TimeRecipe
+    
     pip install -r requirements.txt
 
 How to Run:
