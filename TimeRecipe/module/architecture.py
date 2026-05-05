@@ -480,3 +480,64 @@ class NBeats(nn.Module):
             backcast = block(x)
             x = x - backcast
         return x
+    
+class RegimeSwitchingMLP(nn.Module):
+    """
+    Regime Switching MLP for financial time series.
+    
+    Replaces a single MLP with a mixture of regime-specific MLPs.
+    A gating network learns to softly assign the current input to regimes,
+    and the final output is a weighted sum of each regime MLP's output.
+    
+    No pretraining or regime labels needed - regimes are learned implicitly
+    during end-to-end training.
+    
+    Args:
+        model_in_size: input/output feature dimension
+        d_model: hidden dimension for each regime MLP
+        num_regimes: number of regime-specific MLPs (default 4)
+        dropout: dropout rate
+    """
+    def __init__(self, model_in_size, d_model, num_regimes=4, dropout=0.1):
+        super(RegimeSwitchingMLP, self).__init__()
+        self.num_regimes = num_regimes
+        self.model_in_size = model_in_size
+
+        # One small MLP per regime
+        self.regime_mlps = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(model_in_size, d_model),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model, model_in_size),
+                nn.Dropout(dropout)
+            ) for _ in range(num_regimes)
+        ])
+
+        # Gating network - takes input and outputs soft regime weights
+        self.gate = nn.Sequential(
+            nn.Linear(model_in_size, d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, num_regimes),
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, x):
+        """
+        x: [B, T, model_in_size]
+        Returns: [B, T, model_in_size]
+        """
+        # Compute regime weights: [B, T, num_regimes]
+        weights = self.gate(x)
+
+        # Compute each regime MLP output: [B, T, model_in_size]
+        regime_outputs = torch.stack(
+            [mlp(x) for mlp in self.regime_mlps], dim=2
+        )  # [B, T, num_regimes, model_in_size]
+
+        # Weighted sum across regimes
+        # weights: [B, T, num_regimes] -> [B, T, num_regimes, 1]
+        weights = weights.unsqueeze(-1)
+        out = (regime_outputs * weights).sum(dim=2)  # [B, T, model_in_size]
+
+        return out

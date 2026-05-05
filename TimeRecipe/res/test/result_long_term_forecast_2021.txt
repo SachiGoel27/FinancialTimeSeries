@@ -1,0 +1,3 @@
+custom_pl5_sd2021_unTrue_udFalse_futemporal_ebtoken_ffmlp_ftS  
+mse:0.15996819734573364, mae:0.2423279583454132
+
