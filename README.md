@@ -36,5 +36,7 @@ How to Run:
 To run all of our outlines experiments, do the following. Note this will run a complete iteration through all of the modules on all four datasets. This will not do one run of the pipline with an inputted specified framework.
 
 cd .. # If inside TimeRecipe/, cd back to the repo root
+
 python run_financial_experiments.py --dry_run # Preview
+
 python run_financial_experiments.py # Full experiment list
